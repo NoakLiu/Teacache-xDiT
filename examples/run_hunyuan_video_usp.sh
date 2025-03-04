@@ -5,7 +5,7 @@ export PYTHONPATH=$PWD:$PYTHONPATH
 
 # CogVideoX configuration
 SCRIPT="hunyuan_video_usp_example.py"
-MODEL_ID="/cfs/dit/HunyuanVideo"
+MODEL_ID="./tencent/HunyuanVideo/"
 # MODEL_ID="tencent/HunyuanVideo"
 INFERENCE_STEP=50
 
@@ -41,3 +41,4 @@ $PARALLLEL_VAE \
 $ENABLE_TILING \
 $ENABLE_MODEL_CPU_OFFLOAD \
 $COMPILE_FLAG
+
