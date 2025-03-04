@@ -114,8 +114,17 @@ def teacache_forward(
             ip_adapter_image_embeds = joint_attention_kwargs.pop("ip_adapter_image_embeds")
             ip_hidden_states = self.encoder_hid_proj(ip_adapter_image_embeds)
             joint_attention_kwargs.update({"ip_hidden_states": ip_hidden_states})
-
+        
+        device = hidden_states.device
         if self.enable_teacache:
+            if dist.is_initialized():
+                tensor_cnt = torch.tensor(self.cnt, device=device)
+                tensor_accum = torch.tensor(self.accumulated_rel_l1_distance, device=device)
+                dist.broadcast(tensor_cnt, src=0)
+                dist.broadcast(tensor_accum, src=0)
+                self.cnt = tensor_cnt.item()
+                self.accumulated_rel_l1_distance = tensor_accum.item()
+
             inp = hidden_states.clone()
             temb_ = temb.clone()
             modulated_inp, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.transformer_blocks[0].norm1(inp, emb=temb_)
@@ -126,16 +135,30 @@ def teacache_forward(
                 coefficients = [4.98651651e+02, -2.83781631e+02,  5.58554382e+01, -3.82021401e+00, 2.64230861e-01]
                 rescale_func = np.poly1d(coefficients)
                 self.accumulated_rel_l1_distance += rescale_func(((modulated_inp-self.previous_modulated_input).abs().mean() / self.previous_modulated_input.abs().mean()).cpu().item())
+                if dist.is_initialized():
+                    tensor_accum = torch.tensor(self.accumulated_rel_l1_distance, device=device)
+                    dist.broadcast(tensor_accum, src=0)
+                    self.accumulated_rel_l1_distance = tensor_accum.item()
+
                 if self.accumulated_rel_l1_distance < self.rel_l1_thresh:
                     should_calc = False
                 else:
                     should_calc = True
                     self.accumulated_rel_l1_distance = 0
+
+            should_calc_tensor = torch.tensor(should_calc, device=hidden_states.device)
+            if dist.is_initialized():
+                dist.broadcast(should_calc_tensor, src=0)
+            should_calc = should_calc_tensor.item()
+
             self.previous_modulated_input = modulated_inp 
             self.cnt += 1 
             if self.cnt == self.num_steps:
-                self.cnt = 0           
-        
+                self.cnt = 0
+                      
+        if dist.is_initialized():
+            dist.barrier()
+
         if self.enable_teacache:
             if not should_calc:
                 hidden_states += self.previous_residual

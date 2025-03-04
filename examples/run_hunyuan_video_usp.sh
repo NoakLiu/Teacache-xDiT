@@ -4,8 +4,8 @@ set -x
 export PYTHONPATH=$PWD:$PYTHONPATH
 
 # CogVideoX configuration
-SCRIPT="hunyuan_video_usp_example.py"
-MODEL_ID="./tencent/HunyuanVideo/"
+SCRIPT="teacache/hunyuanvideo_teacache.py"
+MODEL_ID="./hunyuanvideo-community/HunyuanVideo/"
 # MODEL_ID="tencent/HunyuanVideo"
 INFERENCE_STEP=50
 
@@ -16,7 +16,7 @@ TASK_ARGS="--height 720 --width 1280 --num_frames 129"
 
 # CogVideoX parallel configuration
 N_GPUS=8
-PARALLEL_ARGS="--ulysses_degree 4 --ring_degree 2"
+PARALLEL_ARGS="--ulysses_degree 8 --ring_degree 1"
 # CFG_ARGS="--use_cfg_parallel"
 
 # Uncomment and modify these as needed
@@ -35,7 +35,7 @@ $PIPEFUSION_ARGS \
 $OUTPUT_ARGS \
 --num_inference_steps $INFERENCE_STEP \
 --warmup_steps 0 \
---prompt "A cat walks on the grass, realistic" \
+--prompt "A cat walks on the grass, a dog chasing after a boy, realistic" \
 $CFG_ARGS \
 $PARALLLEL_VAE \
 $ENABLE_TILING \
