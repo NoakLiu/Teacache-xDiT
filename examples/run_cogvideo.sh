@@ -10,7 +10,7 @@ find_free_port() {
 }
 
 export PYTHONPATH=$PWD:$PYTHONPATH
-
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 # CogVideoX configuration
 SCRIPT="teacache/cogvideox_tecache.py"
 # SCRIPT="cogvideox_example.py"
@@ -22,10 +22,10 @@ mkdir -p ./results
 
 # CogVideoX specific task args
 TASK_ARGS="--height 768 --width 1360 --num_frames 17"
-export CUDA_VISIBLE_DEVICES=1
+
 # CogVideoX parallel configuration
-N_GPUS=1
-PARALLEL_ARGS="--ulysses_degree 1 --ring_degree 1"
+N_GPUS=8
+PARALLEL_ARGS="--ulysses_degree ${N_GPUS} --ring_degree 1"
 # CFG_ARGS="--use_cfg_parallel"
 
 # Uncomment and modify these as needed
