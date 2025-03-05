@@ -14,8 +14,9 @@ mkdir -p ./results
 TASK_ARGS="--height 480 --width 720 --num_frames 49"
 
 # ConsisID parallel configuration
-N_GPUS=6
-PARALLEL_ARGS="--ulysses_degree 6 --ring_degree 1"
+N_GPUS=1
+
+PARALLEL_ARGS="--ulysses_degree $N_GPUS --ring_degree 1"
 # CFG_ARGS="--use_cfg_parallel"
 
 # Uncomment and modify these as needed

@@ -927,19 +927,19 @@ class ConsisIDPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin):
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
                     noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
 
-                # compute the previous noisy sample x_t -> x_t-1
-                if not isinstance(self.scheduler, CogVideoXDPMScheduler):
-                    latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
-                else:
-                    latents, old_pred_original_sample = self.scheduler.step(
-                        noise_pred,
-                        old_pred_original_sample,
-                        t,
-                        timesteps[i - 1] if i > 0 else None,
-                        latents,
-                        **extra_step_kwargs,
-                        return_dict=False,
-                    )
+                # # compute the previous noisy sample x_t -> x_t-1
+                # if not isinstance(self.scheduler, CogVideoXDPMScheduler):
+                #     latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
+                # else:
+                latents, old_pred_original_sample = self.scheduler.step(
+                    noise_pred,
+                    old_pred_original_sample,
+                    t,
+                    timesteps[i - 1] if i > 0 else None,
+                    latents,
+                    **extra_step_kwargs,
+                    return_dict=False,
+                )
                 latents = latents.to(prompt_embeds.dtype)
 
                 # call the callback, if provided

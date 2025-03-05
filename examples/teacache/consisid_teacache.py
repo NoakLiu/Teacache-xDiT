@@ -41,7 +41,7 @@ import torch.distributed as dist
 
 
 
-@xFuserBaseWrapper.forward_check_condition
+
 def teacache_forward(
     self,
     hidden_states: torch.Tensor,
@@ -96,8 +96,16 @@ def teacache_forward(
     encoder_hidden_states = hidden_states[:, :text_seq_length]
     hidden_states = hidden_states[:, text_seq_length:]
 
-
+    device = hidden_states.device
     if self.enable_teacache:
+        if dist.is_initialized():
+            tensor_cnt = torch.tensor(self.cnt, device=device)
+            tensor_accum = torch.tensor(self.accumulated_rel_l1_distance, device=device)
+            dist.broadcast(tensor_cnt, src=0)
+            dist.broadcast(tensor_accum, src=0)
+            self.cnt = tensor_cnt.item()
+            self.accumulated_rel_l1_distance = tensor_accum.item()
+
         if self.cnt == 0 or self.cnt == self.num_steps-1:
             should_calc = True
             self.accumulated_rel_l1_distance = 0
@@ -105,15 +113,36 @@ def teacache_forward(
             coefficients = [-1.53880483e+03,  8.43202495e+02, -1.34363087e+02,  7.97131516e+00, -5.23162339e-02]
             rescale_func = np.poly1d(coefficients)
             self.accumulated_rel_l1_distance += rescale_func(((emb-self.previous_modulated_input).abs().mean() / self.previous_modulated_input.abs().mean()).cpu().item())
+
+            if dist.is_initialized():
+                tensor_accum = torch.tensor(self.accumulated_rel_l1_distance, device=device)
+                dist.broadcast(tensor_accum, src=0)
+                self.accumulated_rel_l1_distance = tensor_accum.item()
+
             if self.accumulated_rel_l1_distance < self.rel_l1_thresh:
                 should_calc = False
             else:
                 should_calc = True
                 self.accumulated_rel_l1_distance = 0
+                
+        should_calc_tensor = torch.tensor(should_calc, device=hidden_states.device)
+        if dist.is_initialized():
+            dist.broadcast(should_calc_tensor, src=0)
+        should_calc = should_calc_tensor.item()
+
         self.previous_modulated_input = emb
         self.cnt += 1
+        tensor_cnt = torch.tensor(self.cnt, device=device)
+        if dist.is_initialized():
+            dist.broadcast(tensor_cnt, src=0)
+            
+        self.cnt = tensor_cnt.item()
+
         if self.cnt == self.num_steps-1:
             self.cnt = 0   
+
+    if dist.is_initialized():
+        dist.barrier()
 
     if self.enable_teacache:
         if not should_calc:
@@ -236,7 +265,7 @@ def main():
         snapshot_download(repo_id="BestWishYsh/ConsisID-preview", local_dir=engine_config.model_config.model)
     else:
         print(f"Base Model already exists in {engine_config.model_config.model}, skipping download.")
-
+    
     # 2. Load Pipeline
     device = torch.device(f"cuda:{local_rank}")
     pipe = xFuserConsisIDPipeline.from_pretrained(
@@ -281,7 +310,7 @@ def main():
     torch.cuda.reset_peak_memory_stats()
     start_time = time.time()
 
-    pipe.transformer.__class__.enable_teacache = True
+    pipe.transformer.__class__.enable_teacache = False
     pipe.transformer.__class__.cnt = 0
     pipe.transformer.__class__.num_steps = input_config.num_inference_steps
     pipe.transformer.__class__.rel_l1_thresh = 0.2  # 0.1 for 1.6x speedup -- 0.15 for 2.1x speedup -- 0.2 for 2.5x speedup
