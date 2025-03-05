@@ -20,8 +20,12 @@ from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from diffusers.utils import USE_PEFT_BACKEND, is_torch_version, logging, scale_lora_layers, unscale_lora_layers
 import torch
 import numpy as np
+from xfuser.core.distributed.parallel_state import (
+    get_tensor_model_parallel_world_size,
+    is_pipeline_first_stage,
+    is_pipeline_last_stage,
+)
 
-logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 def teacache_forward(
         self,
@@ -74,12 +78,16 @@ def teacache_forward(
             # weight the lora layers by setting `lora_scale` for each PEFT layer
             scale_lora_layers(self, lora_scale)
         else:
-            if joint_attention_kwargs is not None and joint_attention_kwargs.get("scale", None) is not None:
+            if (
+                joint_attention_kwargs is not None
+                and joint_attention_kwargs.get("scale", None) is not None
+            ):
                 logger.warning(
                     "Passing `scale` via `joint_attention_kwargs` when not using the PEFT backend is ineffective."
                 )
 
-        hidden_states = self.x_embedder(hidden_states)
+        if is_pipeline_first_stage():
+            hidden_states = self.x_embedder(hidden_states)
 
         timestep = timestep.to(hidden_states.dtype) * 1000
         if guidance is not None:
@@ -92,7 +100,8 @@ def teacache_forward(
             if guidance is None
             else self.time_text_embed(timestep, guidance, pooled_projections)
         )
-        encoder_hidden_states = self.context_embedder(encoder_hidden_states)
+        if is_pipeline_first_stage():
+            encoder_hidden_states = self.context_embedder(encoder_hidden_states)
 
         if txt_ids.ndim == 3:
             logger.warning(
@@ -108,13 +117,8 @@ def teacache_forward(
             img_ids = img_ids[0]
 
         ids = torch.cat((txt_ids, img_ids), dim=0)
-        image_rotary_emb = self.pos_embed(ids)
-
-        if joint_attention_kwargs is not None and "ip_adapter_image_embeds" in joint_attention_kwargs:
-            ip_adapter_image_embeds = joint_attention_kwargs.pop("ip_adapter_image_embeds")
-            ip_hidden_states = self.encoder_hid_proj(ip_adapter_image_embeds)
-            joint_attention_kwargs.update({"ip_hidden_states": ip_hidden_states})
-        
+        image_rotary_emb = self.pos_embed(ids)            
+            
         device = hidden_states.device
         if self.enable_teacache:
             if dist.is_initialized():
@@ -124,7 +128,6 @@ def teacache_forward(
                 dist.broadcast(tensor_accum, src=0)
                 self.cnt = tensor_cnt.item()
                 self.accumulated_rel_l1_distance = tensor_accum.item()
-
             inp = hidden_states.clone()
             temb_ = temb.clone()
             modulated_inp, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.transformer_blocks[0].norm1(inp, emb=temb_)
@@ -139,13 +142,11 @@ def teacache_forward(
                     tensor_accum = torch.tensor(self.accumulated_rel_l1_distance, device=device)
                     dist.broadcast(tensor_accum, src=0)
                     self.accumulated_rel_l1_distance = tensor_accum.item()
-
                 if self.accumulated_rel_l1_distance < self.rel_l1_thresh:
                     should_calc = False
                 else:
                     should_calc = True
                     self.accumulated_rel_l1_distance = 0
-
             should_calc_tensor = torch.tensor(should_calc, device=hidden_states.device)
             if dist.is_initialized():
                 dist.broadcast(should_calc_tensor, src=0)
@@ -155,10 +156,10 @@ def teacache_forward(
             self.cnt += 1 
             if self.cnt == self.num_steps:
                 self.cnt = 0
-                      
+                
         if dist.is_initialized():
             dist.barrier()
-
+            
         if self.enable_teacache:
             if not should_calc:
                 hidden_states += self.previous_residual
@@ -192,20 +193,19 @@ def teacache_forward(
                             encoder_hidden_states=encoder_hidden_states,
                             temb=temb,
                             image_rotary_emb=image_rotary_emb,
-                            joint_attention_kwargs=joint_attention_kwargs,
                         )
 
-                    # controlnet residual
-                    if controlnet_block_samples is not None:
-                        interval_control = len(self.transformer_blocks) / len(controlnet_block_samples)
-                        interval_control = int(np.ceil(interval_control))
-                        # For Xlabs ControlNet.
-                        if controlnet_blocks_repeat:
-                            hidden_states = (
-                                hidden_states + controlnet_block_samples[index_block % len(controlnet_block_samples)]
-                            )
-                        else:
-                            hidden_states = hidden_states + controlnet_block_samples[index_block // interval_control]
+                    # # controlnet residual
+                    # if controlnet_block_samples is not None:
+                    #     interval_control = len(self.transformer_blocks) / len(controlnet_block_samples)
+                    #     interval_control = int(np.ceil(interval_control))
+                    #     # For Xlabs ControlNet.
+                    #     if controlnet_blocks_repeat:
+                    #         hidden_states = (
+                    #             hidden_states + controlnet_block_samples[index_block % len(controlnet_block_samples)]
+                    #         )
+                    #     else:
+                    #         hidden_states = hidden_states + controlnet_block_samples[index_block // interval_control]
                 hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=1)
 
                 for index_block, block in enumerate(self.single_transformer_blocks):
@@ -234,18 +234,18 @@ def teacache_forward(
                             hidden_states=hidden_states,
                             temb=temb,
                             image_rotary_emb=image_rotary_emb,
-                            joint_attention_kwargs=joint_attention_kwargs,
                         )
 
-                    # controlnet residual
-                    if controlnet_single_block_samples is not None:
-                        interval_control = len(self.single_transformer_blocks) / len(controlnet_single_block_samples)
-                        interval_control = int(np.ceil(interval_control))
-                        hidden_states[:, encoder_hidden_states.shape[1] :, ...] = (
-                            hidden_states[:, encoder_hidden_states.shape[1] :, ...]
-                            + controlnet_single_block_samples[index_block // interval_control]
-                        )
-
+                    # # controlnet residual
+                    # if controlnet_single_block_samples is not None:
+                    #     interval_control = len(self.single_transformer_blocks) / len(controlnet_single_block_samples)
+                    #     interval_control = int(np.ceil(interval_control))
+                    #     hidden_states[:, encoder_hidden_states.shape[1] :, ...] = (
+                    #         hidden_states[:, encoder_hidden_states.shape[1] :, ...]
+                    #         + controlnet_single_block_samples[index_block // interval_control]
+                    #     )
+                        
+                encoder_hidden_states = hidden_states[:, : encoder_hidden_states.shape[1], ...]
                 hidden_states = hidden_states[:, encoder_hidden_states.shape[1] :, ...]
                 self.previous_residual = hidden_states - ori_hidden_states
         else:
@@ -277,20 +277,19 @@ def teacache_forward(
                         encoder_hidden_states=encoder_hidden_states,
                         temb=temb,
                         image_rotary_emb=image_rotary_emb,
-                        joint_attention_kwargs=joint_attention_kwargs,
                     )
 
-                # controlnet residual
-                if controlnet_block_samples is not None:
-                    interval_control = len(self.transformer_blocks) / len(controlnet_block_samples)
-                    interval_control = int(np.ceil(interval_control))
-                    # For Xlabs ControlNet.
-                    if controlnet_blocks_repeat:
-                        hidden_states = (
-                            hidden_states + controlnet_block_samples[index_block % len(controlnet_block_samples)]
-                        )
-                    else:
-                        hidden_states = hidden_states + controlnet_block_samples[index_block // interval_control]
+                # # controlnet residual
+                # if controlnet_block_samples is not None:
+                #     interval_control = len(self.transformer_blocks) / len(controlnet_block_samples)
+                #     interval_control = int(np.ceil(interval_control))
+                #     # For Xlabs ControlNet.
+                #     if controlnet_blocks_repeat:
+                #         hidden_states = (
+                #             hidden_states + controlnet_block_samples[index_block % len(controlnet_block_samples)]
+                #         )
+                #     else:
+                #         hidden_states = hidden_states + controlnet_block_samples[index_block // interval_control]
             hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=1)
 
             for index_block, block in enumerate(self.single_transformer_blocks):
@@ -319,22 +318,25 @@ def teacache_forward(
                         hidden_states=hidden_states,
                         temb=temb,
                         image_rotary_emb=image_rotary_emb,
-                        joint_attention_kwargs=joint_attention_kwargs,
                     )
 
-                # controlnet residual
-                if controlnet_single_block_samples is not None:
-                    interval_control = len(self.single_transformer_blocks) / len(controlnet_single_block_samples)
-                    interval_control = int(np.ceil(interval_control))
-                    hidden_states[:, encoder_hidden_states.shape[1] :, ...] = (
-                        hidden_states[:, encoder_hidden_states.shape[1] :, ...]
-                        + controlnet_single_block_samples[index_block // interval_control]
-                    )
-
+                # # controlnet residual
+                # if controlnet_single_block_samples is not None:
+                #     interval_control = len(self.single_transformer_blocks) / len(controlnet_single_block_samples)
+                #     interval_control = int(np.ceil(interval_control))
+                #     hidden_states[:, encoder_hidden_states.shape[1] :, ...] = (
+                #         hidden_states[:, encoder_hidden_states.shape[1] :, ...]
+                #         + controlnet_single_block_samples[index_block // interval_control]
+                #     )
+                
+            encoder_hidden_states = hidden_states[:, : encoder_hidden_states.shape[1], ...]
             hidden_states = hidden_states[:, encoder_hidden_states.shape[1] :, ...]
 
-        hidden_states = self.norm_out(hidden_states, temb)
-        output = self.proj_out(hidden_states)
+        if self.stage_info.after_flags["single_transformer_blocks"]:
+            hidden_states = self.norm_out(hidden_states, temb)
+            output = self.proj_out(hidden_states), None
+        else:
+            output = hidden_states, encoder_hidden_states
 
         if USE_PEFT_BACKEND:
             # remove `lora_scale` from each PEFT layer
@@ -374,11 +376,35 @@ def main():
     else:
         pipe = pipe.to(f"cuda:{local_rank}")
 
+    from xfuser.model_executor.models.transformers.transformer_flux import xFuserFluxTransformer2DWrapper
+    
+    # 如果不是分布式环境或者tensor_parallel_degree为1，确保使用包装器
+    if not dist.is_initialized() or get_tensor_model_parallel_world_size() == 1:
+        # 判断是否需要应用包装器
+        if not isinstance(pipe.transformer, xFuserFluxTransformer2DWrapper):
+            # 导入必要的包装器类
+            from xfuser.model_executor.models.transformers.transformer_flux import xFuserFluxTransformer2DWrapper
+            
+            # 保存原始transformer
+            original_transformer = pipe.transformer
+            
+            # 应用包装器
+            pipe.transformer = xFuserFluxTransformer2DWrapper(original_transformer)
+            
+            # # 确保wrapper有正确的属性
+            # if not hasattr(pipe.transformer, 'stage_info'):
+            #     class StageInfo:
+            #         def __init__(self):
+            #             self.after_flags = {"single_transformer_blocks": True, "transformer_blocks": True}
+                
+            #     pipe.transformer.stage_info = StageInfo()
+            
+
 
     pipe.transformer.__class__.enable_teacache = True
     pipe.transformer.__class__.cnt = 0
     pipe.transformer.__class__.num_steps = input_config.num_inference_steps
-    pipe.transformer.__class__.rel_l1_thresh = 0.6 # 0.25 for 1.5x speedup, 0.4 for 1.8x speedup, 0.6 for 2.0x speedup, 0.8 for 2.25x speedup
+    pipe.transformer.__class__.rel_l1_thresh = 0.8 # 0.25 for 1.5x speedup, 0.4 for 1.8x speedup, 0.6 for 2.0x speedup, 0.8 for 2.25x speedup
     pipe.transformer.__class__.accumulated_rel_l1_distance = 0
     pipe.transformer.__class__.previous_modulated_input = None
     pipe.transformer.__class__.previous_residual = None
