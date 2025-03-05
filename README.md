@@ -10,6 +10,9 @@ This repository implements multi-GPU parallelization of TeaCache within the xDiT
 Please run the appropriate script (`run_[your_model].sh`) to get started.
 
 
+### Note: All following experiments are conducted on the A800
+
+
 ### Performance on CogVideoX
 | Model | Method | 1x | 2x | 4x | 8x |
 |-------|--------|-----|-----|-----|-----|
