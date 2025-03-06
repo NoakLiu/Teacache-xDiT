@@ -2,10 +2,10 @@
 
 This repository implements multi-GPU parallelization of TeaCache within the xDiT framework. The supported models include:
 
-- **CogVideoX**
-- **ConsisID**
-- **HunyuanVideo**
-- **Flux.1 [dev]**
+- [**CogVideoX**](https://github.com/THUDM/CogVideo)
+- [**ConsisID**](https://github.com/PKU-YuanGroup/ConsisID)
+- [**HunyuanVideo**](https://github.com/Tencent/HunyuanVideo)
+- [**Flux.1 [dev]**](https://github.com/black-forest-labs/flux)
 
 Please run the appropriate script (`run_[your_model].sh`) to get started.
 
@@ -40,3 +40,7 @@ Please run the appropriate script (`run_[your_model].sh`) to get started.
 | ConsistID | Ulysses | 218.64 | 123.84 | 88.6 | 54.09 |
 | | Ours(slow)-0.1 | 142.18 | 81.39 | 60.71 | 39.77 |
 | | Ours(fast)-0.2 | 90.34 | 53.82 | 41.34 | 27.18 |
+
+
+# Acknowledgement
+This respotory is built based on [TeaCache](https://github.com/ali-vilab/TeaCache/tree/main) and [xDiT](https://github.com/xdit-project/xDiT?tab=readme-ov-file), thanks for their contributors!
