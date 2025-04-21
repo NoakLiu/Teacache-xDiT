@@ -1387,7 +1387,7 @@ def generate(args):
         )
         # TeaCache
         wan_i2v.__class__.generate = i2v_generate
-        wan_t2v.model.__class__.forward = new_forward_func
+        wan_i2v.model.__class__.forward = new_forward_func
         wan_i2v.model.forward = types.MethodType(new_forward_func, wan_i2v.model)
         wan_i2v.model.__class__.enable_teacache = True
         wan_i2v.model.__class__.cnt = 0
