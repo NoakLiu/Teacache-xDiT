@@ -10,6 +10,15 @@ This repository implements multi-GPU parallelization of TeaCache within the xDiT
 
 Please run the appropriate script (`run_[your_model].sh`) to get started.
 
+For env, same as FastCache-xDiT, but we need follows to complete
+
+```bash
+huggingface-cli login
+pip install protobuf
+chmod +x run_flux.sh
+./run_flux.sh
+```
+
 
 ### Note: All following experiments are conducted on the A800
 
